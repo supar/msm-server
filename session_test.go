@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
-	//"time"
+	"time"
 )
 
 type SomeSessMock struct {
@@ -259,6 +259,53 @@ func Test_SessionStoreItemExists(t *testing.T) {
 	}
 }
 
+func Test_EachItemCallbackExecute(t *testing.T) {
+	var (
+		queue = make([]string, 20)
+		prov  = &Provider{
+			store: make([]*Session, 0),
+		}
+	)
+
+	for i, _ := range queue {
+		queue[i] = RandStringId(64)
+		prov.append(NewSession(queue[i]))
+	}
+
+	l := len(queue)
+	prov.each(func(idx int, s *Session) bool {
+		if idx < 0 || idx >= l {
+			t.Fatalf("Unexpected index value %d", idx)
+		}
+
+		return true
+	})
+}
+
+func Test_FlushSession(t *testing.T) {
+	var (
+		db, _   = InitDBMock(t)
+		prov, _ = NewManager(db, 1)
+		queue   = 20
+	)
+
+	for i := 0; i < queue; i++ {
+		s := NewSession(RandStringId(64))
+
+		if (i % 2) == 0 {
+			s.uptime = s.uptime.Add(-10 * time.Duration(60) * time.Second)
+		}
+
+		prov.append(s)
+	}
+
+	prov.flush()
+
+	if l := len(prov.store); l != (queue / 2) {
+		t.Errorf("Expected storage length %d, but got %d", (queue / 2), l)
+	}
+}
+
 func Test_SessionConcuranceCallback(t *testing.T) {
 	var (
 		sess = NewSession("827364g3656g")
@@ -370,6 +417,10 @@ func Test_StartSessionConcurrance(t *testing.T) {
 
 		sess, err = handler(prov, queue[i])
 
+		if (i % 1) == 0 {
+			sess.uptime = sess.uptime.Add(-1 * 121 * prov.cacheLifeTime)
+		}
+
 		if err != nil {
 			t.Fatalf("Unexpected error: %s", err.Error())
 		}
@@ -396,6 +447,8 @@ func Test_StartSessionConcurrance(t *testing.T) {
 		}
 	}
 
+	time.AfterFunc(time.Second/3, func() { prov.Flush() })
+
 	for i, sid := range queue {
 		if (i % 2) == 0 {
 			go concurrent(prov, sid, handler)
@@ -408,8 +461,4 @@ func Test_StartSessionConcurrance(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("There were unfulfilled expections: %s", err.Error())
 	}
-
-	//for _, s := range prov.store {
-	//	t.Log(s)
-	//}
 }
