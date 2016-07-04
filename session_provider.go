@@ -297,7 +297,7 @@ func (this *Provider) watchFlush() {
 
 func (this *Provider) watchGarbage() {
 	this.garbage()
-	time.AfterFunc(gcInterval, func() { this.watchGarbage() })
+	time.AfterFunc(this.gcInterval, func() { this.watchGarbage() })
 }
 
 func EncodeGob(obj map[interface{}]interface{}) ([]byte, error) {
