@@ -26,6 +26,7 @@ type Provider struct {
 
 type ProviderInterface interface {
 	Start(http.ResponseWriter, *http.Request) (*Session, error)
+	Flush()
 	Name() string
 	GC(int64, int64)
 }
@@ -52,6 +53,7 @@ func NewManager(db *sql.DB, maxlifetime int) (manager *Provider, err error) {
 	return
 }
 
+// Dump sessions from memmory to database
 func (this *Provider) Flush() {
 	this.lock.Lock()
 	this.flush()
@@ -59,6 +61,7 @@ func (this *Provider) Flush() {
 
 }
 
+// Memmory storage flush and session garbage collector
 func (this *Provider) GC(cache, gc int64) {
 	if cache > 0 {
 		this.cacheLifeTime = time.Duration(cache) * time.Second
@@ -72,6 +75,7 @@ func (this *Provider) GC(cache, gc int64) {
 	this.watchGarbage()
 }
 
+// Cookie name
 func (this *Provider) Name() string {
 	return this.cookieName
 }
@@ -140,6 +144,8 @@ func (this *Provider) each(callback func(int, *Session) bool) {
 	}
 }
 
+// Look through the sessions slice and determine those were not
+// active long time. Dump to databse inactive items and remote from slice
 func (this *Provider) flush() {
 	var (
 		fn func(int, *Session) bool
