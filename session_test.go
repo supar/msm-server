@@ -190,6 +190,26 @@ func Test_StartSessionWithExistingCookie(t *testing.T) {
 	}
 }
 
+func Test_GarbageRecordsRemove(t *testing.T) {
+	var (
+		err error
+
+		db, mock = InitDBMock(t)
+		prov, _  = NewManager(db, 2)
+	)
+
+	mock.ExpectExec("DELETE").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err = prov.garbage(); err != nil {
+		t.Errorf("Unexpected error: %s", err.Error())
+	}
+
+	// we make sure that all expectations were met
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("There were unfulfilled expections: %s", err.Error())
+	}
+}
+
 func Test_SessionStoreItemAdd(t *testing.T) {
 	var (
 		queue = make([]string, 20)

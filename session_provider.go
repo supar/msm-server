@@ -16,8 +16,10 @@ type Provider struct {
 	cacheLifeTime time.Duration
 	cookieName    string
 	conn          *sql.DB
+	// Seconds. Run sessions garbage collection interval
+	gcInterval time.Duration
 	// Hours. Database garbage collector value
-	maxAge int64
+	maxAge int
 
 	lock sync.Mutex
 	// Memmory storage for the active sessions
@@ -27,6 +29,7 @@ type Provider struct {
 type ProviderInterface interface {
 	Start(http.ResponseWriter, *http.Request) (*Session, error)
 	Name() string
+	GC(int64, int64)
 }
 
 func init() {
@@ -41,16 +44,21 @@ func init() {
 }
 
 // Create session manager
-func NewManager(db *sql.DB, maxlifetime int64) (manager *Provider, err error) {
+func NewManager(db *sql.DB, maxlifetime int) (manager *Provider, err error) {
 	if db == nil {
 		return nil, errors.New("Valid database connection required")
+	}
+
+	if maxlifetime <= 0 {
+		maxlifetime = 86400 * 180
 	}
 
 	manager = &Provider{
 		cacheLifeTime: time.Duration(120) * time.Second,
 		cookieName:    NAME + "-sid",
 		conn:          db,
-		maxAge:        168,
+		gcInterval:    time.Duration(1) * time.Hour,
+		maxAge:        maxlifetime,
 		store:         make([]*Session, 0),
 	}
 
@@ -62,7 +70,19 @@ func (this *Provider) Flush() {
 	this.flush()
 	this.lock.Unlock()
 
-	//time.AfterFunc(this.cacheLifeTime, func() { this.Flush() })
+}
+
+func (this *Provider) GC(cache, gc int64) {
+	if cache > 0 {
+		this.cacheLifeTime = time.Duration(cache) * time.Second
+	}
+
+	if gc > 0 && gc < 720 {
+		this.gcInterval = time.Duration(gc) * time.Hour
+	}
+
+	this.watchFlush()
+	this.watchGarbage()
 }
 
 func (this *Provider) Name() string {
@@ -98,6 +118,7 @@ func (this *Provider) Start(w http.ResponseWriter, r *http.Request) (session *Se
 	cookie = &http.Cookie{
 		Name:     this.cookieName,
 		Value:    url.QueryEscape(sid),
+		MaxAge:   this.maxAge,
 		Path:     "/",
 		HttpOnly: true,
 	}
@@ -162,6 +183,17 @@ func (this *Provider) flush() {
 	this.store = store
 }
 
+// Clean session garbage from DB
+func (this *Provider) garbage() (err error) {
+	var (
+		now = time.Now().Unix()
+	)
+
+	_, err = this.conn.Exec("DELETE FROM `msm_session` WHERE ? - `updated` > ?", now, this.maxAge)
+
+	return
+}
+
 // Get session from storage
 func (this *Provider) get(sid string) (idx int, session *Session) {
 	var (
@@ -189,6 +221,7 @@ func (this *Provider) get(sid string) (idx int, session *Session) {
 // Restore session from DB or create new if not exists
 func (this *Provider) read(sid string) (session *Session, err error) {
 	var (
+		now         int64
 		row         *sql.Row
 		sessiondata []byte
 	)
@@ -203,8 +236,10 @@ func (this *Provider) read(sid string) (session *Session, err error) {
 			return nil, err
 		}
 
-		_, err = this.conn.Exec("INSERT INTO `msm_session`(`id`,`data`,`starte) VALUES(?, ?, ?)",
-			sid, "", time.Now().Unix())
+		now = time.Now().Unix()
+
+		_, err = this.conn.Exec("INSERT INTO `msm_session`(`id`,`data`,`started`, `updated`) VALUES(?, ?, ?, ?)",
+			sid, "", now, now)
 
 		if err != nil {
 			return nil, err
@@ -222,6 +257,7 @@ func (this *Provider) read(sid string) (session *Session, err error) {
 	return
 }
 
+// Save session ddata to the DB
 func (this *Provider) save(s *Session) (err error) {
 	var (
 		data []byte
@@ -252,6 +288,16 @@ func (this *Provider) sid(r *http.Request) (string, error) {
 
 	// HTTP Request contains cookie for sessionid info.
 	return url.QueryUnescape(cookie.Value)
+}
+
+func (this *Provider) watchFlush() {
+	this.Flush()
+	time.AfterFunc(this.cacheLifeTime, func() { this.watchFlush() })
+}
+
+func (this *Provider) watchGarbage() {
+	this.garbage()
+	time.AfterFunc(gcInterval, func() { this.watchGarbage() })
 }
 
 func EncodeGob(obj map[interface{}]interface{}) ([]byte, error) {
