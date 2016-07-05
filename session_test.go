@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -96,6 +97,36 @@ func Test_ProviderReadExisting(t *testing.T) {
 		if _, err = prov.read(v["key"].(string)); err != nil {
 			t.Error(err)
 		}
+	}
+
+	// we make sure that all expectations were met
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("There were unfulfilled expections: %s", err.Error())
+	}
+}
+
+func Test_CreateCookieSidIfCookieNotPasswedInRequest(t *testing.T) {
+	var (
+		err error
+
+		db, mock = InitDBMock(t)
+		prov, _  = NewManager(db, 0)
+	)
+
+	mock.ExpectQuery("SELECT").WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"data"}))
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	w := httptest.NewRecorder()
+	r, _ := http.NewRequest("GET", "/", nil)
+
+	_, err = prov.Start(w, r)
+	if err != nil {
+		t.Fatalf("Unexpected error: %s", err.Error())
+	}
+
+	if ok, _ := regexp.MatchString("msm-server-sid=.", r.Header.Get("Cookie")); !ok {
+		t.Errorf("Expexted valid cookie in the response")
 	}
 
 	// we make sure that all expectations were met

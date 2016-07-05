@@ -90,9 +90,13 @@ func (this *Provider) Start(w http.ResponseWriter, r *http.Request) (session *Se
 		return nil, err
 	}
 
-	this.lock.Lock()
-	_, session = this.get(sid)
-	this.lock.Unlock()
+	if sid != "" {
+		this.lock.Lock()
+		_, session = this.get(sid)
+		this.lock.Unlock()
+	} else {
+		sid = RandStringId(64)
+	}
 
 	if session == nil {
 		if session, err = this.read(sid); err != nil {
