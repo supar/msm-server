@@ -333,7 +333,7 @@ func Test_EachItemCallbackExecute(t *testing.T) {
 	})
 }
 
-func Test_FlushSession(t *testing.T) {
+func Test_KeepAliveSessionsInTheCache(t *testing.T) {
 	var (
 		db, _   = InitDBMock(t)
 		prov, _ = NewManager(db, 1)
@@ -350,7 +350,7 @@ func Test_FlushSession(t *testing.T) {
 		prov.append(s)
 	}
 
-	prov.flush()
+	prov.keepAlive()
 
 	if l := len(prov.store); l != (queue / 2) {
 		t.Errorf("Expected storage length %d, but got %d", (queue / 2), l)
@@ -427,6 +427,7 @@ func Test_StartSessionConcurrance(t *testing.T) {
 		queue    = make([]string, 20)
 	)
 
+	prov.cacheTimer.Reset(time.Second / 3)
 	defer db.Close()
 
 	// Create routine to triiger the end of asynchronous writing
@@ -497,8 +498,6 @@ func Test_StartSessionConcurrance(t *testing.T) {
 			}
 		}
 	}
-
-	time.AfterFunc(time.Second/3, func() { prov.Flush() })
 
 	for i, sid := range queue {
 		if (i % 2) == 0 {

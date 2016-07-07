@@ -12,6 +12,7 @@ import (
 type Provider struct {
 	// Seconds. Keep session data from DB in the memmory
 	cacheLifeTime time.Duration
+	cacheTimer    *time.Timer
 	cookieName    string
 	conn          *sql.DB
 	// Seconds. Run sessions garbage collection interval
@@ -28,7 +29,7 @@ type ProviderInterface interface {
 	Start(http.ResponseWriter, *http.Request) (*Session, error)
 	Flush()
 	Name() string
-	GC(int64, int64)
+	GC(int64)
 }
 
 // Create session manager
@@ -50,6 +51,9 @@ func NewManager(db *sql.DB, maxlifetime int) (manager *Provider, err error) {
 		store:         make([]*Session, 0),
 	}
 
+	// Watch alive sessions
+	manager.watchCache()
+
 	return
 }
 
@@ -62,22 +66,24 @@ func (this *Provider) Flush() {
 }
 
 // Memmory storage flush and session garbage collector
-func (this *Provider) GC(cache, gc int64) {
-	if cache > 0 {
-		this.cacheLifeTime = time.Duration(cache) * time.Second
-	}
-
+func (this *Provider) GC(gc int64) {
 	if gc > 0 && gc < 720 {
 		this.gcInterval = time.Duration(gc) * time.Hour
 	}
 
-	this.watchFlush()
 	this.watchGarbage()
 }
 
 // Cookie name
 func (this *Provider) Name() string {
 	return this.cookieName
+}
+
+// Change interval to check cache for the active sessions
+func (this *Provider) SetCacheInterval(cache int64) {
+	if cache > 0 {
+		this.cacheLifeTime = time.Duration(cache) * time.Second
+	}
 }
 
 func (this *Provider) Start(w http.ResponseWriter, r *http.Request) (session *Session, err error) {
@@ -148,36 +154,18 @@ func (this *Provider) each(callback func(int, *Session) bool) {
 	}
 }
 
-// Look through the sessions slice and determine those were not
-// active long time. Dump to databse inactive items and remote from slice
 func (this *Provider) flush() {
 	var (
 		fn func(int, *Session) bool
-
-		// Set cache time point
-		gcTime = time.Now().Add(-1 * this.cacheLifeTime)
-		// Store live entries
-		store = make([]*Session, 0)
 	)
 
 	fn = func(idx int, session *Session) bool {
-		var alive bool
-
-		session.Lock()
-		alive = session.uptime.After(gcTime)
-		session.Unlock()
-
-		if !alive {
-			this.save(session)
-		} else {
-			store = append(store, session)
-		}
+		this.save(session)
 
 		return true
 	}
 
 	this.each(fn)
-	this.store = store
 }
 
 // Clean session garbage from DB
@@ -213,6 +201,38 @@ func (this *Provider) get(sid string) (idx int, session *Session) {
 	this.each(fn)
 
 	return
+}
+
+// Look through the sessions slice and determine those were not
+// active long time. Dump to databse inactive items and remove from slice
+func (this *Provider) keepAlive() {
+	var (
+		fn func(int, *Session) bool
+
+		// Set cache time point
+		gcTime = time.Now().Add(-1 * this.cacheLifeTime)
+		// Store live entries
+		store = make([]*Session, 0)
+	)
+
+	fn = func(idx int, session *Session) bool {
+		var alive bool
+
+		session.Lock()
+		alive = session.uptime.After(gcTime)
+		session.Unlock()
+
+		if !alive {
+			this.save(session)
+		} else {
+			store = append(store, session)
+		}
+
+		return true
+	}
+
+	this.each(fn)
+	this.store = store
 }
 
 // Restore session from DB or create new if not exists
@@ -287,9 +307,12 @@ func (this *Provider) sid(r *http.Request) (string, error) {
 	return url.QueryUnescape(cookie.Value)
 }
 
-func (this *Provider) watchFlush() {
-	this.Flush()
-	time.AfterFunc(this.cacheLifeTime, func() { this.watchFlush() })
+func (this *Provider) watchCache() {
+	this.lock.Lock()
+	this.keepAlive()
+	this.lock.Unlock()
+
+	this.cacheTimer = time.AfterFunc(this.cacheLifeTime, this.watchCache)
 }
 
 func (this *Provider) watchGarbage() {
