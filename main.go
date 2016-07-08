@@ -59,7 +59,7 @@ func main() {
 	// Run garbage collector
 	sessions.GC(0)
 
-	http.HandleFunc("/", NewContext(handleRoot, sessions))
+	http.HandleFunc("/", HandleInContext(handleRoot, sessions))
 
 	http.ListenAndServe(cfg.Server, nil)
 }
@@ -68,29 +68,6 @@ type Context struct {
 	db *sql.DB
 	r  *http.Request
 	s  *Session
-}
-
-func NewContext(fn func(http.ResponseWriter, *Context), prov *Provider) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var (
-			ctx          *Context
-			session, err = prov.Start(w, r)
-		)
-
-		if err != nil {
-			log.Error(err)
-			http.Error(w, "Cannot start session", 500)
-			return
-		}
-
-		ctx = &Context{
-			db: prov.conn,
-			r:  r,
-			s:  session,
-		}
-
-		fn(w, ctx)
-	}
 }
 
 func handleRoot(w http.ResponseWriter, ctx *Context) {
